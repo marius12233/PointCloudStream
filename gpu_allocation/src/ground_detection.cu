@@ -45,14 +45,29 @@ __device__ double distance(const Point& p, const double* plane) {
            sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
 }
 
-__global__ void ransac(const Point* points, int numPoints, float3* bestPlane, int* inliers, float distanceThreshold, int maxIterations) {
+__device__ void atomicUpdate(int* address, int val_to_compare_and_store, float4* float4_address, float4 val_to_store)
+{
+
+    int ret = *address;
+
+    while(val_to_compare_and_store > ret) {
+
+        int old = ret;
+        ret = atomicCAS(address, old, val_to_compare_and_store);
+        if(ret == old) { // it means that the current thread has modified the value and returned the old value
+            *float4_address = val_to_store;
+            break;
+        }
+    }
+}
+
+__global__ void ransac(const Point* points, int numPoints, float4* bestPlane, int* inliers, float distanceThreshold, int maxIterations) {
     
     __shared__ float s_bestPlane[256]; // Shared memory for storing each thread's best plane parameters
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-
-    
     s_bestPlane[threadIdx.x] = 0; // Initialize the number of inliers for this thread
-
+    
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    
     if (idx >= maxIterations) return;
 
     curandState state;
@@ -94,19 +109,9 @@ __global__ void ransac(const Point* points, int numPoints, float3* bestPlane, in
                 //bestThread = i;
             }
         }
-
-        if (numInliers > inliers[0]) {
-            inliers[0] = numInliers;
-            bestPlane[0] = normal;
-            bestPlane[1] = make_float3(d, d, d);
-        }
+        float4 current_plane = make_float4(normal.x, normal.y, normal.z, d);
+        atomicUpdate(&inliers[0], numInliers, bestPlane, current_plane);
     }
-
-    //     if (numInliers > inliers[0]) {
-    //     inliers[0] = numInliers;
-    //     bestPlane[0] = normal;
-    //     bestPlane[1] = make_float3(d, d, d);
-    // }
 }
 
 std::vector<Point> generatePointsOnPlane(int numPoints, double planeHeight) {
@@ -135,13 +140,13 @@ int main() {
     int maxIterations = 10000;
     
     Point* d_points;
-    float3* d_bestPlane;
+    float4* d_bestPlane;
     int* d_inliers;
 
     cudaMalloc((void**)&d_points, numPoints * sizeof(Point));
     cudaMemcpy(d_points, points.data(), numPoints * sizeof(Point), cudaMemcpyHostToDevice);
 
-    cudaMalloc((void**)&d_bestPlane, 2 * sizeof(float3)); // One for normal, one for d
+    cudaMalloc((void**)&d_bestPlane, sizeof(float4)); // One for normal, one for d
     cudaMalloc((void**)&d_inliers, sizeof(int));
 
     int* inliers = new int;
@@ -185,10 +190,10 @@ int main() {
 
     cudaMemcpy(inliers, d_inliers, sizeof(int), cudaMemcpyDeviceToHost);
 
-    float3 bestPlane[2];
-    cudaMemcpy(bestPlane, d_bestPlane, 2 * sizeof(float3), cudaMemcpyDeviceToHost);
+    float4 bestPlane[1];
+    cudaMemcpy(bestPlane, d_bestPlane, sizeof(float4), cudaMemcpyDeviceToHost);
 
-    std::cout << "Best plane parameters: Normal = (" << bestPlane[0].x << ", " << bestPlane[0].y << ", " << bestPlane[0].z << "), d = " << bestPlane[1].x << std::endl;
+    std::cout << "Best plane parameters: Normal = (" << bestPlane[0].x << ", " << bestPlane[0].y << ", " << bestPlane[0].z << "), d = " << bestPlane[0].w << std::endl;
 
     std::cout << "inliers: " << inliers[0] << std::endl;
     
