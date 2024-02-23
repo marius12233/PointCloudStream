@@ -4,18 +4,9 @@
 #include <ctime>
 #include <curand_kernel.h>
 #include <random>
-//#include "gpu_allocation/ground_detection.hpp"
+#include "gpu_allocation/ground_detection.hpp"
 
-#define BLOCK_DIM 256
-#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
-{
-   if (code != cudaSuccess) 
-   {
-      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-      if (abort) exit(code);
-   }
-}
+#define BLOCK_DIM 128
 
 __device__ float3 operator-(float3 a, float3 b) {
     return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -56,7 +47,7 @@ __device__ void atomicUpdate(int* address, int val_to_compare_and_store, float4*
 __global__ void ransac(const float4*  pointCloud, int numPoints, float4* bestPlane, int* inliers, float distanceThreshold, int maxIterations) {
     
     __shared__ float s_bestPlane[BLOCK_DIM]; // Shared memory for storing each thread's best plane parameters
-    s_bestPlane[threadIdx.x] = 0; // Initialize the number of inliers for this thread
+    s_bestPlane[threadIdx.x] = 0; // Initialize the number of inliers for the current thread
     
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     
@@ -130,7 +121,8 @@ void groundPointsDetection(const float4* d_point_cloud, size_t num_current_point
     int threadsPerBlock = BLOCK_DIM;
 
     int blocksPerGrid = inputSize / threadsPerBlock + ((inputSize % threadsPerBlock) ? 1:0); 
-        
+    
+    printf("# blocks: %d # threads: %d", blocksPerGrid, threadsPerBlock);
     ransac<<<blocksPerGrid, threadsPerBlock>>>(d_point_cloud, num_current_points, d_fitting_plane, num_inliers, distance_threshold, max_iterations);
     gpuErrchk( cudaPeekAtLastError() );
 
