@@ -4,7 +4,6 @@
 #include <array>
 
 static constexpr std::size_t MAX_NUM_POINTS = 300000;
-static constexpr std::size_t NUM_FIELDS = 4;
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -39,18 +38,22 @@ class PointCloudGPU {
             cudaFree(d_point_cloud_ptr);
         };
 
-        void computeRangeArray(std::array<float, MAX_NUM_POINTS>& ranges) {
+        void computeRange(std::array<float, MAX_NUM_POINTS>& range_array) {
             float* d_ranges_ptr;
             const size_t bytes = num_points * sizeof(float);
             gpuErrchk(cudaMalloc(&d_ranges_ptr, bytes));
 
             computeRangeKernel(d_point_cloud_ptr, d_ranges_ptr, num_points); //point_cloud_array.size());
 
-            gpuErrchk(cudaMemcpy(ranges.data(), d_ranges_ptr, bytes, cudaMemcpyDeviceToHost));
+            gpuErrchk(cudaMemcpy(range_array.data(), d_ranges_ptr, bytes, cudaMemcpyDeviceToHost));
             gpuErrchk(cudaFree(d_ranges_ptr));
 
         };
         //std::array<float4, MAX_NUM_POINTS>& toHost();
+
+        size_t size() { return num_points; };
+
+        float4* devicePointCloudPtr() {return d_point_cloud_ptr;};
     
     private:
         std::array<float4, MAX_NUM_POINTS> point_cloud_array;

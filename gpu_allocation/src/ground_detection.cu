@@ -4,7 +4,9 @@
 #include <ctime>
 #include <curand_kernel.h>
 #include <random>
+//#include "gpu_allocation/ground_detection.hpp"
 
+#define BLOCK_DIM 256
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
 {
@@ -14,10 +16,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
       if (abort) exit(code);
    }
 }
-
-struct Point {
-    float x, y, z;
-};
 
 __device__ float3 operator-(float3 a, float3 b) {
     return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -39,12 +37,6 @@ __device__ float distance(const float3& p, const float3& n, float d) {
     return fabs(dot(p, n) + d) / sqrtf(n.x * n.x + n.y * n.y + n.z * n.z);
 }
 
-
-__device__ double distance(const Point& p, const double* plane) {
-    return std::abs(plane[0] * p.x + plane[1] * p.y + plane[2] * p.z + plane[3]) /
-           sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
-}
-
 __device__ void atomicUpdate(int* address, int val_to_compare_and_store, float4* float4_address, float4 val_to_store)
 {
 
@@ -61,9 +53,9 @@ __device__ void atomicUpdate(int* address, int val_to_compare_and_store, float4*
     }
 }
 
-__global__ void ransac(const Point* points, int numPoints, float4* bestPlane, int* inliers, float distanceThreshold, int maxIterations) {
+__global__ void ransac(const float4*  pointCloud, int numPoints, float4* bestPlane, int* inliers, float distanceThreshold, int maxIterations) {
     
-    __shared__ float s_bestPlane[256]; // Shared memory for storing each thread's best plane parameters
+    __shared__ float s_bestPlane[BLOCK_DIM]; // Shared memory for storing each thread's best plane parameters
     s_bestPlane[threadIdx.x] = 0; // Initialize the number of inliers for this thread
     
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -77,9 +69,9 @@ __global__ void ransac(const Point* points, int numPoints, float4* bestPlane, in
     for (int i = 0; i < 3; ++i)
         index[i] = curand(&state) % numPoints;
 
-    float3 p1 = make_float3(points[index[0]].x, points[index[0]].y, points[index[0]].z);
-    float3 p2 = make_float3(points[index[1]].x, points[index[1]].y, points[index[1]].z);
-    float3 p3 = make_float3(points[index[2]].x, points[index[2]].y, points[index[2]].z);
+    float3 p1 = make_float3( pointCloud[index[0]].x,  pointCloud[index[0]].y,  pointCloud[index[0]].z);
+    float3 p2 = make_float3( pointCloud[index[1]].x,  pointCloud[index[1]].y,  pointCloud[index[1]].z);
+    float3 p3 = make_float3( pointCloud[index[2]].x,  pointCloud[index[2]].y,  pointCloud[index[2]].z);
 
     float3 normal = cross(p2 - p1, p3 - p1);
     float length = sqrtf(dot(normal, normal));
@@ -90,7 +82,8 @@ __global__ void ransac(const Point* points, int numPoints, float4* bestPlane, in
     int numInliers = 0;
 
     for (int i = 0; i < numPoints; ++i) {
-        float dist = distance(make_float3(points[i].x, points[i].y, points[i].z), normal, d);
+        auto& point = pointCloud[i];
+        float dist = distance(make_float3( point.x,  point.y,  point.z), normal, d);
         if (dist <= distanceThreshold)
             numInliers++;
     }
@@ -99,14 +92,13 @@ __global__ void ransac(const Point* points, int numPoints, float4* bestPlane, in
 
     __syncthreads(); // Ensure all threads have stored their number of inliers before reduction
 
-    // Reduction to find the best solution among all threads
+    // Reduction to find the best solution among all threads of the same block
+    // This solution allows to reduce the number of threads trying to update values on memory.
     if (threadIdx.x == 0) {
         double maxInliers = 0;
-        //int bestThread = 0;
         for (int i = 0; i < blockDim.x; ++i) {
             if (s_bestPlane[i] > maxInliers) {
                 maxInliers = s_bestPlane[i];
-                //bestThread = i;
             }
         }
         float4 current_plane = make_float4(normal.x, normal.y, normal.z, d);
@@ -114,15 +106,50 @@ __global__ void ransac(const Point* points, int numPoints, float4* bestPlane, in
     }
 }
 
-std::vector<Point> generatePointsOnPlane(int numPoints, double planeHeight) {
-    std::vector<Point> points;
+__global__ void getInliersMask(const float4* pointCloud, int numPoints, const float4* bestPlane, int* inliersMask, float distanceThreshold) {
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= numPoints) return;
+
+    inliersMask[idx] = 0; // pre-set all the values of the inliersMask to 0.
+
+    auto& point = pointCloud[idx];
+    float3 normal = make_float3(bestPlane->x, bestPlane->y, bestPlane->z);
+    float d = bestPlane->w;
+    float dist = distance(make_float3( point.x, point.y, point.z), normal, d);
+    if (dist <= distanceThreshold)
+        inliersMask[idx] = 1;
+
+}
+
+void groundPointsDetection(const float4* d_point_cloud, size_t num_current_points, int* d_inliers_mask, float4* d_fitting_plane, int* num_inliers, float distance_threshold, int max_iterations) {
+    int inputSize = num_current_points; // The size of the input data
+    cudaDeviceProp props;
+    cudaGetDeviceProperties(&props, 0);
+    int threadsPerBlock = BLOCK_DIM;
+
+    int blocksPerGrid = inputSize / threadsPerBlock + ((inputSize % threadsPerBlock) ? 1:0); 
+        
+    ransac<<<blocksPerGrid, threadsPerBlock>>>(d_point_cloud, num_current_points, d_fitting_plane, num_inliers, distance_threshold, max_iterations);
+    gpuErrchk( cudaPeekAtLastError() );
+
+    getInliersMask<<<blocksPerGrid, threadsPerBlock>>>(d_point_cloud, num_current_points, d_fitting_plane, d_inliers_mask, distance_threshold);
+    gpuErrchk( cudaPeekAtLastError() );
+}
+
+/*
+// For test purpose
+// TODO: Use in unit tests
+std::vector<float4> generatePointCloudOnPlane(int numPoints, double planeHeight) {
+    std::vector<float4> points;
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<double> dis(-10.0, 10.0); // Adjust range as needed
     std::uniform_real_distribution<double> dis_z(-0.05, 0.05); // Adjust range as needed
 
     for (int i = 0; i < numPoints; ++i) {
-        Point p;
+        float4 p;
         p.x = dis(gen);
         p.y = dis(gen);
         p.z = planeHeight + dis_z(gen); // All points are on the same plane parallel to XY plane
@@ -133,18 +160,18 @@ std::vector<Point> generatePointsOnPlane(int numPoints, double planeHeight) {
 }
 
 int main() {
-    std::vector<Point> points = generatePointsOnPlane(100000, 0);//{{1, 2, 0.1}, {4, 5, 0.05}, {7, 8, 0.01}, {10, 11, 10.002}, {13, 14, 10.015}};
+    std::vector<float4> points = generatePointCloudOnPlane(100000, 0);//{{1, 2, 0.1}, {4, 5, 0.05}, {7, 8, 0.01}, {10, 11, 10.002}, {13, 14, 10.015}};
     int numPoints = points.size();
 
     float distanceThreshold = 0.1f;
     int maxIterations = 10000;
     
-    Point* d_points;
+    float4* d_points;
     float4* d_bestPlane;
     int* d_inliers;
 
-    cudaMalloc((void**)&d_points, numPoints * sizeof(Point));
-    cudaMemcpy(d_points, points.data(), numPoints * sizeof(Point), cudaMemcpyHostToDevice);
+    cudaMalloc((void**)&d_points, numPoints * sizeof(float4));
+    cudaMemcpy(d_points, points.data(), numPoints * sizeof(float4), cudaMemcpyHostToDevice);
 
     cudaMalloc((void**)&d_bestPlane, sizeof(float4)); // One for normal, one for d
     cudaMalloc((void**)&d_inliers, sizeof(int));
@@ -154,7 +181,10 @@ int main() {
 
     cudaMemcpy(d_inliers, inliers, sizeof(int), cudaMemcpyHostToDevice);
 
-    int threadsPerBlock = 256;
+    int* d_inliers_mask;
+    cudaMalloc((void**)&d_inliers_mask, numPoints * sizeof(int));
+
+    int threadsPerBlock = BLOCK_DIM;
     int blocksPerGrid = (maxIterations + threadsPerBlock - 1) / threadsPerBlock;
 
     // Use APIs for thread occupancy
@@ -188,14 +218,33 @@ int main() {
     ransac<<<blocksPerGrid, threadsPerBlock>>>(d_points, numPoints, d_bestPlane, d_inliers, distanceThreshold, maxIterations);
     gpuErrchk( cudaPeekAtLastError() );
 
+    threadsPerBlock = BLOCK_DIM;
+    blocksPerGrid = (numPoints + threadsPerBlock - 1) / threadsPerBlock;
+
+    getInliersMask<<<blocksPerGrid, threadsPerBlock>>>(d_points, numPoints, d_bestPlane, d_inliers_mask, distanceThreshold);
+    gpuErrchk( cudaPeekAtLastError() );
+
     cudaMemcpy(inliers, d_inliers, sizeof(int), cudaMemcpyDeviceToHost);
 
     float4 bestPlane[1];
     cudaMemcpy(bestPlane, d_bestPlane, sizeof(float4), cudaMemcpyDeviceToHost);
 
+    int inliersMask[numPoints];
+    cudaMemcpy(inliersMask, d_inliers_mask, numPoints * sizeof(int), cudaMemcpyDeviceToHost);
+
     std::cout << "Best plane parameters: Normal = (" << bestPlane[0].x << ", " << bestPlane[0].y << ", " << bestPlane[0].z << "), d = " << bestPlane[0].w << std::endl;
 
     std::cout << "inliers: " << inliers[0] << std::endl;
+
+    bool isWorking = true;
+    for(int i=0; i<numPoints; i++) {
+        if(inliersMask[i] != 1) {
+            isWorking=false;
+            std::cout << "Not working at idx: " << i << std::endl;
+        };
+    }
+
+    std::cout << "is working: " << isWorking << std::endl;
     
     cudaFree(d_points);
     cudaFree(d_bestPlane);
@@ -204,3 +253,4 @@ int main() {
 
     return 0;
 }
+*/
