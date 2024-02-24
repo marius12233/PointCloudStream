@@ -4,7 +4,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl_ros/point_cloud.h>
-#include "gpu_allocation/ground_detection.hpp"
+#include "gpu_allocation/types_gpu.hpp"
 
 typedef pcl::PointCloud<pcl::PointXYZI> PointCloud;
 class GPUAllocationNode {
@@ -15,9 +15,9 @@ class GPUAllocationNode {
 
     private:
         ros::NodeHandle m_node_handler; 
-        ros::Publisher m_publisher_filtered_pointcloud;
+        //ros::Publisher m_publisher_filtered_pointcloud;
         ros::Publisher m_publisher_point_cloud_gpu;
         ros::Subscriber m_subscriber_pointcloud;
-        GroundDetectionGPU<PointCloud> m_ground_detection_gpu;
+        PointCloudGPU<PointCloud> m_point_cloud_gpu;
 
 };

@@ -27,7 +27,8 @@ class PointCloudGPU {
         };
 
         
-        PointCloudGPU(cudaIpcMemHandle_t mem_handler, int num_points) {
+        PointCloudGPU(cudaIpcMemHandle_t mem_handler, int num_points_) {
+            num_points = static_cast<size_t>(num_points_);
             m_use_mem_handler = true;
             gpuErrchk(cudaIpcOpenMemHandle((void **) &d_point_cloud_ptr, mem_handler,
                             cudaIpcMemLazyEnablePeerAccess));
@@ -78,11 +79,16 @@ class PointCloudGPU {
             gpuErrchk(cudaFree(d_ranges_ptr));
 
         };
-        //std::array<float4, MAX_NUM_POINTS>& toHost();
+        
+        std::array<float4, MAX_NUM_POINTS>& toHost() {
+            cudaMemcpy(point_cloud_array.data(), d_point_cloud_ptr, num_points * sizeof(float4), cudaMemcpyDeviceToHost);
+            return point_cloud_array;
+        };
 
         size_t size() { return num_points; };
 
         float4* devicePointCloudPtr() {return d_point_cloud_ptr;};
+
     
     private:
         std::array<float4, MAX_NUM_POINTS> point_cloud_array;

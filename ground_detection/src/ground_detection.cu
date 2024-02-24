@@ -4,7 +4,7 @@
 #include <ctime>
 #include <curand_kernel.h>
 #include <random>
-#include "gpu_allocation/ground_detection.hpp"
+#include "ground_detection/ground_detection.hpp"
 
 #define BLOCK_DIM 128
 
