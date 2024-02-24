@@ -1,11 +1,15 @@
 #include "gpu_allocation/gpu_allocation_node.hpp"
 #include "gpu_allocation/ground_detection.hpp"
 #include "gpu_allocation/types_gpu.hpp"
+#include "gpu_msgs/PointCloudGPUHandle.h"
 
-GPUAllocationNode::GPUAllocationNode() : m_ground_detection_gpu{100000, 0.15f} {
+GPUAllocationNode::GPUAllocationNode() : m_ground_detection_gpu{10000, 0.15f} {
     //Topic you want to publish
     std::string pointcloud_filtered_topic{"/pointcloud_filtered_topic"};
     m_publisher_filtered_pointcloud = m_node_handler.advertise<sensor_msgs::PointCloud2>(pointcloud_filtered_topic, 1000);
+
+    std::string pointcloud_gpu_topic{"/pointcloud_gpu_handle"};
+    m_publisher_point_cloud_gpu = m_node_handler.advertise<gpu_msgs::PointCloudGPUHandle>(pointcloud_gpu_topic, 1000);
     //Topic you want to subscribe
     std::string pointcloud_topic{"/velodyne_points"};
     m_subscriber_pointcloud = m_node_handler.subscribe(pointcloud_topic, 1000, &GPUAllocationNode::callbackPointCloud, this);
@@ -14,10 +18,9 @@ GPUAllocationNode::GPUAllocationNode() : m_ground_detection_gpu{100000, 0.15f} {
 }
 
 void GPUAllocationNode::callbackPointCloud(const PointCloud::Ptr pointcloud) {
-    PointCloudGPU<PointCloud> point_cloud_gpu(*pointcloud);
-    m_ground_detection_gpu.fit(point_cloud_gpu);
+    m_ground_detection_gpu.fit(*pointcloud);
 
-    auto& inliers_mask = m_ground_detection_gpu.getHostInliersMask(point_cloud_gpu.size());
+    auto& inliers_mask = m_ground_detection_gpu.getHostInliersMask(pointcloud->size());
     int i = 0;
     for(PointCloud::iterator pointcloud_iterator = pointcloud->begin();
         pointcloud_iterator!=pointcloud->end();
@@ -30,6 +33,18 @@ void GPUAllocationNode::callbackPointCloud(const PointCloud::Ptr pointcloud) {
         }
         i++;
     }
+
+    // Just for test purpose
+    PointCloudGPU<PointCloud> point_cloud_gpu{*pointcloud};
+
+    cudaIpcMemHandle_t memHandle;
+    gpuErrchk(cudaIpcGetMemHandle(&memHandle, point_cloud_gpu.devicePointCloudPtr()));
+
+    gpu_msgs::PointCloudGPUHandle msg;
+    msg.num_points = point_cloud_gpu.size();
+    msg.mem_handler = memHandle.reserved;
+
+    m_publisher_point_cloud_gpu.publish(msg);
     m_publisher_filtered_pointcloud.publish(pointcloud);
 }
 

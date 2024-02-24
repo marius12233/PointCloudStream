@@ -63,6 +63,8 @@
   <exec_depend>roscpp</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
 
+  <depend>gpu_msgs</depend>
+
   <!--- Libraries for pcl -->
   <build_depend>pcl_conversions</build_depend>
   <build_export_depend>pcl_conversions</build_export_depend>

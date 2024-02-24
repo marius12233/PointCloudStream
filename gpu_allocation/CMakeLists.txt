@@ -12,6 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   pcl_conversions
   pcl_ros
+  gpu_msgs
 )
 
 FIND_PACKAGE(CUDA REQUIRED)
@@ -130,7 +131,7 @@ include_directories(
 # add_library(${PROJECT_NAME}
 #   src/point_cloud_gpu.cpp
 # )
-cuda_add_library(custom_cuda_libs STATIC src/ops.cu)
+cuda_add_library(custom_cuda_libs STATIC src/ops.cu src/ground_detection.cu)
 
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries
