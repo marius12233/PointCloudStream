@@ -139,7 +139,13 @@ namespace velodyne_pointcloud
       }
       data_->unpack(scanMsg->packets[i], *container_ptr, scanMsg->header.stamp);
     }
+    ros::Time begin = ros::Time::now();
     // publish the accumulated cloud message
+    ros::Time now = ros::Time::now();
+    
+    while(now.sec - begin.sec < 1) {
+      now = ros::Time::now();
+    }
     output_.publish(container_ptr->finishCloud());
 
     diag_topic_->tick(scanMsg->header.stamp);

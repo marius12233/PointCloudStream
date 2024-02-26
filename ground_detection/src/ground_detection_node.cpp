@@ -3,7 +3,7 @@
 #include "gpu_allocation/types_gpu.hpp"
 #include "gpu_msgs/PointCloudGPUHandle.h"
 
-GroundDetectionNode::GroundDetectionNode() : m_ground_detection_gpu{10000, 0.1f} {
+GroundDetectionNode::GroundDetectionNode() : m_ground_detection_gpu{10000, 0.3f} {
     //Topic you want to publish
     std::string pointcloud_filtered_topic{"/pointcloud_filtered_topic"};
     m_publisher_filtered_pointcloud = m_node_handler.advertise<sensor_msgs::PointCloud2>(pointcloud_filtered_topic, 1000);

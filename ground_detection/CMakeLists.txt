@@ -16,9 +16,10 @@ find_package(catkin REQUIRED COMPONENTS
   gpu_allocation
 )
 
-FIND_PACKAGE(CUDA REQUIRED)
-SET(CUDA_INCLUDE_DIRS "/usr/local/cuda/include" ${CUDA_INCLUDE_DIRS})
-INCLUDE_DIRECTORIES(${CUDA_INCLUDE_DIRS})
+set(CUDA_VERSION 12.0)
+set(CUDA_TOOLKIT_ROOT_DIR /usr/local/cuda-${CUDA_VERSION})
+
+find_package(CUDA REQUIRED)
 
 set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -std=c++17" )
 
